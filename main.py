@@ -1,0 +1,260 @@
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
+from fastapi.responses import JSONResponse
+from models import SessionLocal, Document, ExtractedText
+from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image
+from sqlalchemy.orm import joinedload
+from datetime import datetime
+import google.generativeai as genai
+from dotenv import load_dotenv
+import os
+
+app = FastAPI()
+
+# Load environment variables
+load_dotenv()
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+
+
+# 🧠 Upload PDF
+@app.post("/upload/pdf")
+async def upload_pdf(file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are allowed.")
+    
+    file_path = save_upload_file(file)
+    extracted = extract_text_from_pdf(file_path)
+
+    db = SessionLocal()
+    doc = Document(
+        name=file.filename,
+        type="pdf",
+        path=file_path,
+        status="processed",
+        upload_date=datetime.utcnow()
+    )
+    db.add(doc)
+    db.flush()
+
+    text_entry = ExtractedText(
+        document_id=doc.id,
+        content=extracted
+    )
+    db.add(text_entry)
+    db.commit()
+    db.refresh(doc)
+    db.close()
+
+    return {"message": "PDF uploaded and processed", "document_id": doc.id}
+
+
+# 🧠 Upload Image with OCR
+@app.post("/upload/image")
+async def upload_image(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
+        raise HTTPException(400, "Only JPG or PNG files are allowed.")
+
+    file_path = save_upload_file(file)
+    extracted = extract_text_from_image(file_path)
+
+    db = SessionLocal()
+    doc = Document(
+        name=file.filename,
+        type="image",
+        path=file_path,
+        status="processed",
+        upload_date=datetime.utcnow()
+    )
+    db.add(doc)
+    db.flush()
+
+    text_entry = ExtractedText(
+        document_id=doc.id,
+        content=extracted
+    )
+    db.add(text_entry)
+    db.commit()
+    db.refresh(doc)
+    db.close()
+
+    return {"message": "Image uploaded and processed", "document_id": doc.id}
+
+
+# 🧠 Upload Plain Text via Form
+@app.post("/upload/text")
+async def upload_text(name: str = Form(...), content: str = Form(...)):
+    db = SessionLocal()
+    doc = Document(
+        name=name,
+        type="text",
+        path="N/A",
+        status="processed",
+        upload_date=datetime.utcnow()
+    )
+    db.add(doc)
+    db.flush()
+
+    text_entry = ExtractedText(
+        document_id=doc.id,
+        content=content
+    )
+    db.add(text_entry)
+    db.commit()
+    db.refresh(doc)
+    db.close()
+
+    return {"message": "Text submitted successfully", "document_id": doc.id}
+
+
+# 🧠 Upload .txt File
+@app.post("/upload/textfile")
+async def upload_text_file(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".txt"):
+        raise HTTPException(400, "Only .txt files are allowed.")
+
+    content = (await file.read()).decode("utf-8")
+
+    db = SessionLocal()
+    doc = Document(
+        name=file.filename,
+        type="text",
+        path="",
+        upload_date=datetime.utcnow(),
+        status="processed"
+    )
+    db.add(doc)
+    db.flush()
+
+    text_entry = ExtractedText(
+        document_id=doc.id,
+        content=content
+    )
+    db.add(text_entry)
+    db.commit()
+    db.refresh(doc)
+    db.close()
+
+    return {"message": "Text file uploaded and processed", "document_id": doc.id}
+
+
+# 📃 List All Documents
+@app.get("/documents")
+def list_documents():
+    db = SessionLocal()
+    docs = db.query(Document).all()
+    db.close()
+    return [
+        {
+            "id": d.id,
+            "name": d.name,
+            "type": d.type,
+            "path": d.path,
+            "upload_date": d.upload_date,
+            "status": d.status
+        }
+        for d in docs
+    ]
+
+
+# 📄 Get Document Content by ID
+@app.get("/document/{doc_id}")
+def get_document(doc_id: int):
+    db = SessionLocal()
+    try:
+        doc = db.query(Document).options(joinedload(Document.extracted_texts)).filter(Document.id == doc_id).first()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        combined_text = "\n".join([et.content for et in doc.extracted_texts])
+
+        return {
+            "id": doc.id,
+            "name": doc.name,
+            "type": doc.type,
+            "status": doc.status,
+            "path": doc.path,
+            "upload_date": doc.upload_date,
+            "content": combined_text
+        }
+    finally:
+        db.close()
+
+
+# 🗑️ Delete a Document by ID
+@app.delete("/document/{doc_id}")
+def delete_document(doc_id: int):
+    db = SessionLocal()
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    if doc.path != "N/A" and os.path.exists(doc.path):
+        os.remove(doc.path)
+
+    db.delete(doc)
+    db.commit()
+    db.close()
+
+    return {"message": "Document deleted successfully"}
+
+
+# 🔍 Search Uploaded Documents
+@app.get("/search")
+def search_documents(query: str = Query(..., description="Search keyword")):
+    db = SessionLocal()
+    try:
+        results = db.query(Document).join(ExtractedText).filter(
+            ExtractedText.content.ilike(f"%{query}%")
+        ).all()
+
+        return [
+            {
+                "document_id": doc.id,
+                "name": doc.name,
+                "type": doc.type,
+                "upload_date": doc.upload_date,
+                "status": doc.status,
+                "snippet": next(
+                    (text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()),
+                    ""
+                )
+            }
+            for doc in results
+        ]
+    finally:
+        db.close()
+        
+
+
+@app.post("/ask")
+def ask_question(question: str = Form(...)):
+    db = SessionLocal()
+    try:
+        # Combine all extracted document text
+        all_texts = db.query(ExtractedText).all()
+        combined_text = "\n".join(text.content for text in all_texts if text.content)
+
+        if not combined_text.strip():
+            return {"answer": "No documents uploaded to answer from."}
+
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(f"""
+            Based on the following documents, answer the question:
+
+            Documents:
+            {combined_text}
+
+            Question:
+            {question}
+        """)
+
+        return {
+            "question": question,
+            "answer": response.text.strip()
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        db.close()
+
