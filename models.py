@@ -77,4 +77,4 @@ class QuestionSource(Base):
 
 # --- Create tables ---
 Base.metadata.create_all(bind=engine)
-print("✅ Database and tables created successfully.")
+print("✅ Database and tables created successfully.")  

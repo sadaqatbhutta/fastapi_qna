@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import JSONResponse
 from models import SessionLocal, Document, ExtractedText
-from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image
+from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image, clean_text
 from sqlalchemy.orm import joinedload
 from datetime import datetime
 import google.generativeai as genai
@@ -14,8 +14,6 @@ app = FastAPI()
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-
-
 # 🧠 Upload PDF
 @app.post("/upload/pdf")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -23,7 +21,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         raise HTTPException(400, "Only PDF files are allowed.")
     
     file_path = save_upload_file(file)
-    extracted = extract_text_from_pdf(file_path)
+    extracted = clean_text(extract_text_from_pdf(file_path))  # Cleaned here
 
     db = SessionLocal()
     doc = Document(
@@ -36,17 +34,13 @@ async def upload_pdf(file: UploadFile = File(...)):
     db.add(doc)
     db.flush()
 
-    text_entry = ExtractedText(
-        document_id=doc.id,
-        content=extracted
-    )
+    text_entry = ExtractedText(document_id=doc.id, content=extracted)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
     db.close()
 
     return {"message": "PDF uploaded and processed", "document_id": doc.id}
-
 
 # 🧠 Upload Image with OCR
 @app.post("/upload/image")
@@ -55,7 +49,7 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(400, "Only JPG or PNG files are allowed.")
 
     file_path = save_upload_file(file)
-    extracted = extract_text_from_image(file_path)
+    extracted = clean_text(extract_text_from_image(file_path))  # Cleaned here
 
     db = SessionLocal()
     doc = Document(
@@ -68,10 +62,7 @@ async def upload_image(file: UploadFile = File(...)):
     db.add(doc)
     db.flush()
 
-    text_entry = ExtractedText(
-        document_id=doc.id,
-        content=extracted
-    )
+    text_entry = ExtractedText(document_id=doc.id, content=extracted)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
@@ -79,32 +70,39 @@ async def upload_image(file: UploadFile = File(...)):
 
     return {"message": "Image uploaded and processed", "document_id": doc.id}
 
-
 # 🧠 Upload Plain Text via Form
 @app.post("/upload/text")
-async def upload_text(name: str = Form(...), content: str = Form(...)):
+async def upload_text(
+    name: str = Form(...),
+    content: str = Form(...),
+    age: int = Form(None),
+    city: str = Form(None)
+):
+    cleaned_content = clean_text(content)
+
     db = SessionLocal()
     doc = Document(
         name=name,
         type="text",
         path="N/A",
         status="processed",
-        upload_date=datetime.utcnow()
+        upload_date=datetime.utcnow(),
+        age=age,
+        city=city
     )
     db.add(doc)
     db.flush()
 
-    text_entry = ExtractedText(
-        document_id=doc.id,
-        content=content
-    )
+    text_entry = ExtractedText(document_id=doc.id, content=cleaned_content)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
     db.close()
 
-    return {"message": "Text submitted successfully", "document_id": doc.id}
-
+    return {
+        "message": "Text submitted successfully",
+        "document_id": doc.id
+    }
 
 # 🧠 Upload .txt File
 @app.post("/upload/textfile")
@@ -113,6 +111,7 @@ async def upload_text_file(file: UploadFile = File(...)):
         raise HTTPException(400, "Only .txt files are allowed.")
 
     content = (await file.read()).decode("utf-8")
+    cleaned_content = clean_text(content)
 
     db = SessionLocal()
     doc = Document(
@@ -125,17 +124,13 @@ async def upload_text_file(file: UploadFile = File(...)):
     db.add(doc)
     db.flush()
 
-    text_entry = ExtractedText(
-        document_id=doc.id,
-        content=content
-    )
+    text_entry = ExtractedText(document_id=doc.id, content=cleaned_content)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
     db.close()
 
     return {"message": "Text file uploaded and processed", "document_id": doc.id}
-
 
 # 📃 List All Documents
 @app.get("/documents")
@@ -154,7 +149,6 @@ def list_documents():
         }
         for d in docs
     ]
-
 
 # 📄 Get Document Content by ID
 @app.get("/document/{doc_id}")
@@ -179,7 +173,6 @@ def get_document(doc_id: int):
     finally:
         db.close()
 
-
 # 🗑️ Delete a Document by ID
 @app.delete("/document/{doc_id}")
 def delete_document(doc_id: int):
@@ -196,7 +189,6 @@ def delete_document(doc_id: int):
     db.close()
 
     return {"message": "Document deleted successfully"}
-
 
 # 🔍 Search Uploaded Documents
 @app.get("/search")
@@ -223,14 +215,12 @@ def search_documents(query: str = Query(..., description="Search keyword")):
         ]
     finally:
         db.close()
-        
 
-
+# 💬 Ask Question
 @app.post("/ask")
 def ask_question(question: str = Form(...)):
     db = SessionLocal()
     try:
-        # Combine all extracted document text
         all_texts = db.query(ExtractedText).all()
         combined_text = "\n".join(text.content for text in all_texts if text.content)
 
@@ -258,3 +248,50 @@ def ask_question(question: str = Form(...)):
     finally:
         db.close()
 
+# 🧠 Contextual Q&A
+conversation_histories = {}  # session_id -> list of previous Q&A
+
+@app.post("/ask/contextual")
+def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
+    db = SessionLocal()
+    try:
+        history = conversation_histories.get(session_id, [])
+        context_text = "\n".join([f"Q: {q['question']}\nA: {q['answer']}" for q in history[-3:]])
+
+        all_texts = db.query(ExtractedText).all()
+        combined_text = "\n".join(text.content for text in all_texts if text.content)
+
+        if not combined_text.strip():
+            return {"answer": "No documents uploaded to answer from."}
+
+        prompt = f"""
+        You are answering questions based on the uploaded documents.
+        Keep in mind the previous conversation history if it helps answer.
+
+        Conversation History:
+        {context_text}
+
+        Documents:
+        {combined_text}
+
+        Current Question:
+        {question}
+        """
+
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        answer = response.text.strip()
+
+        history.append({"question": question, "answer": answer})
+        conversation_histories[session_id] = history
+
+        return {
+            "session_id": session_id,
+            "question": question,
+            "answer": answer
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        db.close()
