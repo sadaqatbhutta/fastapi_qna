@@ -59,7 +59,7 @@ opencv-contrib-python==4.11.0.86
 opencv-python==4.11.0.86
 optree==0.14.0
 packaging==24.2
-panadas==0.2
+pandas==0.2
 pandas==2.3.0
 pillow==11.2.1
 proto-plus==1.26.1

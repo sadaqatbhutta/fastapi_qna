@@ -295,3 +295,9 @@ def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
         return {"error": str(e)}
     finally:
         db.close()
+
+
+# 🔹 ADD THIS FOR DOCKER/HUGGING FACE COMPATIBILITY
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 7860)))
