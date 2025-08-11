@@ -1,14 +1,17 @@
-FROM python:3.10
+# Base image
+FROM python:3.11
 
-# Project ka working directory set karo
-WORKDIR /code
+# Set working directory
+WORKDIR /app
 
-# Dependencies install karo
-COPY requirements.txt .
+# Copy all project files
+COPY . /app
+
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Baaki code copy karo
-COPY . .
+# Expose port for Hugging Face
+EXPOSE 7860
 
-# FastAPI ko run karo (port 7860 Hugging Face ke liye standard hai)
+# Run FastAPI app with uvicorn
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
