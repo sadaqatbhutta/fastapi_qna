@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from models import SessionLocal, Document, ExtractedText
 from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image, clean_text
 from sqlalchemy.orm import joinedload
@@ -8,20 +9,44 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import os
 
+# -------------------- APP SETUP --------------------
 app = FastAPI()
 
 # Load environment variables
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# 🧠 Upload PDF
+# Decide static folder path based on environment
+if os.environ.get("DOCKER", "false").lower() == "true":
+    static_path = "/tmp/static"
+else:
+    static_path = os.path.join(os.path.dirname(__file__), "static")
+
+os.makedirs(static_path, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+# Serve index.html at root
+@app.get("/")
+def home():
+    index_file = os.path.join(static_path, "index.html")
+    if not os.path.exists(index_file):
+        return {"error": "index.html not found in static folder"}
+    return FileResponse(index_file)
+
+# Simple API status check
+@app.get("/api")
+async def read_root():
+    return {"message": "Welcome to my API!"}
+
+
+# -------------------- UPLOAD PDF --------------------
 @app.post("/upload/pdf")
 async def upload_pdf(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are allowed.")
-    
+
     file_path = save_upload_file(file)
-    extracted = clean_text(extract_text_from_pdf(file_path))  # Cleaned here
+    extracted = clean_text(extract_text_from_pdf(file_path))
 
     db = SessionLocal()
     doc = Document(
@@ -42,14 +67,15 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     return {"message": "PDF uploaded and processed", "document_id": doc.id}
 
-# 🧠 Upload Image with OCR
+
+# -------------------- UPLOAD IMAGE --------------------
 @app.post("/upload/image")
 async def upload_image(file: UploadFile = File(...)):
     if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
         raise HTTPException(400, "Only JPG or PNG files are allowed.")
 
     file_path = save_upload_file(file)
-    extracted = clean_text(extract_text_from_image(file_path))  # Cleaned here
+    extracted = clean_text(extract_text_from_image(file_path))
 
     db = SessionLocal()
     doc = Document(
@@ -70,7 +96,8 @@ async def upload_image(file: UploadFile = File(...)):
 
     return {"message": "Image uploaded and processed", "document_id": doc.id}
 
-# 🧠 Upload Plain Text via Form
+
+# -------------------- UPLOAD TEXT --------------------
 @app.post("/upload/text")
 async def upload_text(
     name: str = Form(...),
@@ -99,12 +126,10 @@ async def upload_text(
     db.refresh(doc)
     db.close()
 
-    return {
-        "message": "Text submitted successfully",
-        "document_id": doc.id
-    }
+    return {"message": "Text submitted successfully", "document_id": doc.id}
 
-# 🧠 Upload .txt File
+
+# -------------------- UPLOAD TEXT FILE --------------------
 @app.post("/upload/textfile")
 async def upload_text_file(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".txt"):
@@ -132,7 +157,8 @@ async def upload_text_file(file: UploadFile = File(...)):
 
     return {"message": "Text file uploaded and processed", "document_id": doc.id}
 
-# 📃 List All Documents
+
+# -------------------- LIST DOCUMENTS --------------------
 @app.get("/documents")
 def list_documents():
     db = SessionLocal()
@@ -150,7 +176,8 @@ def list_documents():
         for d in docs
     ]
 
-# 📄 Get Document Content by ID
+
+# -------------------- GET DOCUMENT CONTENT --------------------
 @app.get("/document/{doc_id}")
 def get_document(doc_id: int):
     db = SessionLocal()
@@ -160,7 +187,6 @@ def get_document(doc_id: int):
             raise HTTPException(status_code=404, detail="Document not found")
 
         combined_text = "\n".join([et.content for et in doc.extracted_texts])
-
         return {
             "id": doc.id,
             "name": doc.name,
@@ -173,7 +199,8 @@ def get_document(doc_id: int):
     finally:
         db.close()
 
-# 🗑️ Delete a Document by ID
+
+# -------------------- DELETE DOCUMENT --------------------
 @app.delete("/document/{doc_id}")
 def delete_document(doc_id: int):
     db = SessionLocal()
@@ -190,7 +217,8 @@ def delete_document(doc_id: int):
 
     return {"message": "Document deleted successfully"}
 
-# 🔍 Search Uploaded Documents
+
+# -------------------- SEARCH DOCUMENTS --------------------
 @app.get("/search")
 def search_documents(query: str = Query(..., description="Search keyword")):
     db = SessionLocal()
@@ -216,7 +244,8 @@ def search_documents(query: str = Query(..., description="Search keyword")):
     finally:
         db.close()
 
-# 💬 Ask Question
+
+# -------------------- ASK QUESTION --------------------
 @app.post("/ask")
 def ask_question(question: str = Form(...)):
     db = SessionLocal()
@@ -238,17 +267,14 @@ def ask_question(question: str = Form(...)):
             {question}
         """)
 
-        return {
-            "question": question,
-            "answer": response.text.strip()
-        }
-
+        return {"question": question, "answer": response.text.strip()}
     except Exception as e:
         return {"error": str(e)}
     finally:
         db.close()
 
-# 🧠 Contextual Q&A
+
+# -------------------- CONTEXTUAL Q&A --------------------
 conversation_histories = {}  # session_id -> list of previous Q&A
 
 @app.post("/ask/contextual")
@@ -285,19 +311,14 @@ def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
         history.append({"question": question, "answer": answer})
         conversation_histories[session_id] = history
 
-        return {
-            "session_id": session_id,
-            "question": question,
-            "answer": answer
-        }
-
+        return {"session_id": session_id, "question": question, "answer": answer}
     except Exception as e:
         return {"error": str(e)}
     finally:
         db.close()
 
 
-# 🔹 ADD THIS FOR DOCKER/HUGGING FACE COMPATIBILITY
+# -------------------- RUN APP --------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 7860)))

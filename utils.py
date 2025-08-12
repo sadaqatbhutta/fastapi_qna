@@ -7,7 +7,7 @@ from fastapi import UploadFile
 from uuid import uuid4
 
 # Directory to save uploaded files
-UPLOAD_FOLDER = "uploaded_files"
+UPLOAD_FOLDER = "/tmp/uploaded_files"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # --- Save any uploaded file (PDF/image/text) ---

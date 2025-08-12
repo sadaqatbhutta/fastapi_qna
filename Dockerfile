@@ -1,17 +1,23 @@
 # Base image
-FROM python:3.11
+FROM python:3.10
 
 # Set working directory
 WORKDIR /app
 
-# Copy all project files
-COPY . /app
+# Copy requirements
+COPY requirements.txt .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port for Hugging Face
+# Copy all project files
+COPY . .
+
+# Create static directory and set permissions
+RUN mkdir -p /app/static && chmod -R 777 /app/static
+
+# Expose port
 EXPOSE 7860
 
-# Run FastAPI app with uvicorn
+# Start FastAPI app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
