@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Float
+    create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Float, inspect, text
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
@@ -14,11 +14,6 @@ DATABASE_FILE = "documents.db"
 DATABASE_URL = f"sqlite:///./{DATABASE_FILE}"
 DEBUG = os.getenv("DEBUG") == "1"
 
-# --- Optional: Remove old DB in DEBUG mode ---
-# if DEBUG and os.path.exists(DATABASE_FILE):
-#     os.remove(DATABASE_FILE)
-#     print("🗑️ Old database removed (DEBUG mode)!")
-
 # --- SQLAlchemy setup ---
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -26,7 +21,6 @@ Base = declarative_base()
 
 
 # --- Models ---
-
 class Document(Base):
     __tablename__ = "documents"
 
@@ -36,8 +30,8 @@ class Document(Base):
     path = Column(String)
     upload_date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="processed")  # processed, pending, failed
-    age = Column(Integer, nullable=True)       
-    city = Column(String, nullable=True)     
+    age = Column(Integer, nullable=True)
+    city = Column(String, nullable=True)
     extracted_texts = relationship("ExtractedText", back_populates="document", cascade="all, delete")
     sources = relationship("QuestionSource", back_populates="document", cascade="all, delete")
 
@@ -49,7 +43,6 @@ class ExtractedText(Base):
     document_id = Column(Integer, ForeignKey("documents.id"))
     content = Column(Text)
     page_number = Column(Integer, nullable=True)
-    
 
     document = relationship("Document", back_populates="extracted_texts")
 
@@ -77,6 +70,23 @@ class QuestionSource(Base):
     document = relationship("Document", back_populates="sources")
 
 
-# --- Create tables ---
+# --- Helper function to add missing columns ---
+def add_column_if_missing(table_name, column_name, column_type):
+    inspector = inspect(engine)
+    columns = [col["name"] for col in inspector.get_columns(table_name)]
+    if column_name not in columns:
+        with engine.connect() as conn:
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+            conn.commit()
+        print(f"✅ Column '{column_name}' added to '{table_name}' table.")
+    else:
+        print(f"ℹ️ Column '{column_name}' already exists in '{table_name}' table.")
+
+
+# --- Create tables if they don't exist ---
 Base.metadata.create_all(bind=engine)
-print("✅ Database and tables created successfully.")  
+print("✅ Database and tables created successfully.")
+
+# --- Ensure missing columns are added ---
+add_column_if_missing("documents", "age", "INTEGER")
+add_column_if_missing("documents", "city", "TEXT")
