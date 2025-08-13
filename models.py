@@ -36,7 +36,8 @@ class Document(Base):
     path = Column(String)
     upload_date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="processed")  # processed, pending, failed
-
+    age = Column(Integer, nullable=True)       
+    city = Column(String, nullable=True)     
     extracted_texts = relationship("ExtractedText", back_populates="document", cascade="all, delete")
     sources = relationship("QuestionSource", back_populates="document", cascade="all, delete")
 
@@ -48,6 +49,7 @@ class ExtractedText(Base):
     document_id = Column(Integer, ForeignKey("documents.id"))
     content = Column(Text)
     page_number = Column(Integer, nullable=True)
+    
 
     document = relationship("Document", back_populates="extracted_texts")
 

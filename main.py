@@ -101,9 +101,7 @@ async def upload_image(file: UploadFile = File(...)):
 @app.post("/upload/text")
 async def upload_text(
     name: str = Form(...),
-    content: str = Form(...),
-    age: int = Form(None),
-    city: str = Form(None)
+    content: str = Form(...)
 ):
     cleaned_content = clean_text(content)
 
@@ -113,9 +111,7 @@ async def upload_text(
         type="text",
         path="N/A",
         status="processed",
-        upload_date=datetime.utcnow(),
-        age=age,
-        city=city
+        upload_date=datetime.utcnow()
     )
     db.add(doc)
     db.flush()
@@ -127,7 +123,6 @@ async def upload_text(
     db.close()
 
     return {"message": "Text submitted successfully", "document_id": doc.id}
-
 
 # -------------------- UPLOAD TEXT FILE --------------------
 @app.post("/upload/textfile")

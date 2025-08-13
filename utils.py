@@ -22,6 +22,7 @@ def save_upload_file(file: UploadFile) -> str:
     return file_path
 
 # --- Clean extracted text ---
+
 def clean_text(text: str) -> str:
     if not text:
         return ""
