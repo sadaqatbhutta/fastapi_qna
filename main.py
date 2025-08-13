@@ -5,6 +5,7 @@ from models import SessionLocal, Document, ExtractedText
 from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image, clean_text
 from sqlalchemy.orm import joinedload
 from datetime import datetime
+from models import Question, QuestionSource
 import google.generativeai as genai
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -171,6 +172,7 @@ def search_documents(query: str = Query(..., description="Search keyword")):
     finally:
         db.close()
 
+
 @app.post("/ask")
 def ask_question(question: str = Form(...)):
     db = SessionLocal()
@@ -179,18 +181,26 @@ def ask_question(question: str = Form(...)):
         combined_text = "\n".join(text.content for text in all_texts if text.content)
         if not combined_text.strip():
             return {"answer": "No documents uploaded to answer from."}
+
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(
             f"{settings['prompt']}\n\nDocuments:\n{combined_text}\n\nQuestion:\n{question}",
             generation_config={"temperature": settings["temperature"], "top_k": settings["top_k"]}
         )
-        return {"question": question, "answer": response.text.strip()}
+        answer_text = response.text.strip()
+
+        # --- Save question in database ---
+        q_entry = Question(question_text=question, answer_text=answer_text)
+        db.add(q_entry)
+        db.commit()
+        db.refresh(q_entry)
+
+        return {"question_id": q_entry.id, "question": question, "answer": answer_text}
     except Exception as e:
         return {"error": str(e)}
     finally:
         db.close()
 
-conversation_histories = {}
 
 @app.post("/ask/contextual")
 def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
@@ -202,6 +212,7 @@ def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
         combined_text = "\n".join(text.content for text in all_texts if text.content)
         if not combined_text.strip():
             return {"answer": "No documents uploaded to answer from."}
+
         prompt = f"{settings['prompt']}\n\nConversation History:\n{context_text}\n\nDocuments:\n{combined_text}\n\nCurrent Question:\n{question}"
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(
@@ -209,9 +220,24 @@ def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
             generation_config={"temperature": settings["temperature"], "top_k": settings["top_k"]}
         )
         answer = response.text.strip()
+
+        # --- Save question and link to documents ---
+        q_entry = Question(question_text=question, answer_text=answer)
+        db.add(q_entry)
+        db.flush()  # get q_entry.id
+
+        for doc in db.query(Document).all():
+            qs_entry = QuestionSource(question_id=q_entry.id, document_id=doc.id, relevance_score=None)
+            db.add(qs_entry)
+
+        db.commit()
+        db.refresh(q_entry)
+
+        # --- Update session history ---
         history.append({"question": question, "answer": answer})
         conversation_histories[session_id] = history
-        return {"session_id": session_id, "question": question, "answer": answer}
+
+        return {"session_id": session_id, "question_id": q_entry.id, "question": question, "answer": answer}
     except Exception as e:
         return {"error": str(e)}
     finally:
