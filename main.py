@@ -1,31 +1,47 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depends, Path
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from models import SessionLocal, Document, ExtractedText
+from fastapi.middleware.cors import CORSMiddleware
+from models import SessionLocal, Document, ExtractedText, Question
 from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image, clean_text
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, Session
 from datetime import datetime
-from models import Question, QuestionSource
 import google.generativeai as genai
-from dotenv import load_dotenv
 from pydantic import BaseModel
+from dotenv import load_dotenv
 import os
 
 # -------------------- APP SETUP --------------------
 app = FastAPI()
 
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Production: restrict to your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Load environment variables
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Decide static folder path based on environment
-if os.environ.get("DOCKER", "false").lower() == "true":
-    static_path = "/tmp/static"
-else:
-    static_path = os.path.join(os.path.dirname(__file__), "static")
+# -------------------- FRONTEND BUILD --------------------
+frontend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+assets_path = os.path.join(frontend_path, "assets")
 
-os.makedirs(static_path, exist_ok=True)
-app.mount("/static", StaticFiles(directory=static_path), name="static")
+if not os.path.exists(frontend_path):
+    raise Exception("Frontend not built. Run 'npm run build' inside frontend/ first.")
+
+app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+
+@app.get("/{full_path:path}")
+def serve_frontend(full_path: str = ""):
+    index_file = os.path.join(frontend_path, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    return {"error": "index.html not found. Build frontend first."}
 
 # -------------------- GLOBAL SETTINGS --------------------
 settings = {
@@ -53,26 +69,72 @@ def update_settings(update: SettingsUpdate):
         settings["top_k"] = update.top_k
     return {"message": "Settings updated", "settings": settings}
 
-# -------------------- ROUTES --------------------
+# -------------------- DB DEPENDENCY --------------------
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.get("/")
-def home():
-    index_file = os.path.join(static_path, "index.html")
-    if not os.path.exists(index_file):
-        return {"error": "index.html not found in static folder"}
-    return FileResponse(index_file)
+# -------------------- SAVE Q&A --------------------
+class QnAItem(BaseModel):
+    question: str
+    answer: str
 
-@app.get("/api")
-async def read_root():
-    return {"message": "Welcome to my API!"}
+@app.post("/save")
+def save_qna(item: QnAItem, db: Session = Depends(get_db)):
+    q_entry = Question(question_text=item.question, answer_text=item.answer)
+    db.add(q_entry)
+    db.commit()
+    db.refresh(q_entry)
+    return {"message": "Saved successfully", "question_id": q_entry.id}
 
+@app.get("/saved")
+def get_saved(db: Session = Depends(get_db)):
+    saved_items = db.query(Question).all()
+    return [{"id": q.id, "question": q.question_text, "answer": q.answer_text} for q in saved_items]
+
+@app.delete("/saved/{q_id}")
+def delete_saved(q_id: int, db: Session = Depends(get_db)):
+    q_entry = db.query(Question).filter(Question.id == q_id).first()
+    if not q_entry:
+        raise HTTPException(status_code=404, detail="Question not found")
+    db.delete(q_entry)
+    db.commit()
+    return {"message": "Deleted successfully"}
+
+# -------------------- ASK QUESTION --------------------
+@app.post("/ask")
+def ask_question(question: str = Form(...), db: Session = Depends(get_db)):
+    all_texts = db.query(ExtractedText).all()
+    combined_text = "\n".join(text.content for text in all_texts if text.content)
+    if not combined_text.strip():
+        return {"answer": "No documents uploaded to answer from."}
+
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    try:
+        response = model.generate_content(
+            f"{settings['prompt']}\n\nDocuments:\n{combined_text}\n\nQuestion:\n{question}",
+            generation_config={"temperature": settings["temperature"], "top_k": settings["top_k"]}
+        )
+        answer_text = response.text.strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model error: {e}")
+
+    q_entry = Question(question_text=question, answer_text=answer_text)
+    db.add(q_entry)
+    db.commit()
+    db.refresh(q_entry)
+    return {"question_id": q_entry.id, "question": question, "answer": answer_text}
+
+# -------------------- UPLOAD ENDPOINTS --------------------
 @app.post("/upload/pdf")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are allowed.")
     file_path = save_upload_file(file)
     extracted = clean_text(extract_text_from_pdf(file_path))
-    db = SessionLocal()
     doc = Document(name=file.filename, type="pdf", path=file_path, status="processed", upload_date=datetime.utcnow())
     db.add(doc)
     db.flush()
@@ -80,16 +142,14 @@ async def upload_pdf(file: UploadFile = File(...)):
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
-    db.close()
     return {"message": "PDF uploaded and processed", "document_id": doc.id}
 
 @app.post("/upload/image")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
         raise HTTPException(400, "Only JPG or PNG files are allowed.")
     file_path = save_upload_file(file)
     extracted = clean_text(extract_text_from_image(file_path))
-    db = SessionLocal()
     doc = Document(name=file.filename, type="image", path=file_path, status="processed", upload_date=datetime.utcnow())
     db.add(doc)
     db.flush()
@@ -97,13 +157,11 @@ async def upload_image(file: UploadFile = File(...)):
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
-    db.close()
     return {"message": "Image uploaded and processed", "document_id": doc.id}
 
 @app.post("/upload/text")
-async def upload_text(name: str = Form(...), content: str = Form(...)):
+async def upload_text(name: str = Form(...), content: str = Form(...), db: Session = Depends(get_db)):
     cleaned_content = clean_text(content)
-    db = SessionLocal()
     doc = Document(name=name, type="text", path="N/A", status="processed", upload_date=datetime.utcnow())
     db.add(doc)
     db.flush()
@@ -111,16 +169,14 @@ async def upload_text(name: str = Form(...), content: str = Form(...)):
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
-    db.close()
     return {"message": "Text submitted successfully", "document_id": doc.id}
 
 @app.post("/upload/textfile")
-async def upload_text_file(file: UploadFile = File(...)):
+async def upload_text_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.lower().endswith(".txt"):
         raise HTTPException(400, "Only .txt files are allowed.")
     content = (await file.read()).decode("utf-8")
     cleaned_content = clean_text(content)
-    db = SessionLocal()
     doc = Document(name=file.filename, type="text", path="", upload_date=datetime.utcnow(), status="processed")
     db.add(doc)
     db.flush()
@@ -128,121 +184,67 @@ async def upload_text_file(file: UploadFile = File(...)):
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
-    db.close()
     return {"message": "Text file uploaded and processed", "document_id": doc.id}
 
+# -------------------- DOCUMENT MANAGEMENT --------------------
 @app.get("/documents")
-def list_documents():
-    db = SessionLocal()
+def list_documents(db: Session = Depends(get_db)):
     docs = db.query(Document).all()
-    db.close()
-    return [{"id": d.id, "name": d.name, "type": d.type, "path": d.path, "upload_date": d.upload_date, "status": d.status} for d in docs]
+    return [
+        {
+            "id": d.id,
+            "name": d.name,
+            "type": d.type,
+            "path": d.path,
+            "upload_date": d.upload_date,
+            "status": d.status
+        }
+        for d in docs
+    ]
 
 @app.get("/document/{doc_id}")
-def get_document(doc_id: int):
-    db = SessionLocal()
-    try:
-        doc = db.query(Document).options(joinedload(Document.extracted_texts)).filter(Document.id == doc_id).first()
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        combined_text = "\n".join([et.content for et in doc.extracted_texts])
-        return {"id": doc.id, "name": doc.name, "type": doc.type, "status": doc.status, "path": doc.path, "upload_date": doc.upload_date, "content": combined_text}
-    finally:
-        db.close()
+def get_document(doc_id: int = Path(..., gt=0), db: Session = Depends(get_db)):
+    doc = db.query(Document).options(joinedload(Document.extracted_texts)).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    combined_text = "\n".join([et.content for et in doc.extracted_texts])
+    return {
+        "id": doc.id,
+        "name": doc.name,
+        "type": doc.type,
+        "status": doc.status,
+        "path": doc.path,
+        "upload_date": doc.upload_date,
+        "content": combined_text
+    }
 
 @app.delete("/document/{doc_id}")
-def delete_document(doc_id: int):
-    db = SessionLocal()
+def delete_document(doc_id: int = Path(..., gt=0), db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
         raise HTTPException(404, "Document not found")
-    if doc.path != "N/A" and os.path.exists(doc.path):
+    if doc.path != "N/A" and doc.path and os.path.exists(doc.path):
         os.remove(doc.path)
     db.delete(doc)
     db.commit()
-    db.close()
     return {"message": "Document deleted successfully"}
 
 @app.get("/search")
-def search_documents(query: str = Query(..., description="Search keyword")):
-    db = SessionLocal()
-    try:
-        results = db.query(Document).join(ExtractedText).filter(ExtractedText.content.ilike(f"%{query}%")).all()
-        return [{"document_id": doc.id, "name": doc.name, "type": doc.type, "upload_date": doc.upload_date, "status": doc.status, "snippet": next((text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()), "")} for doc in results]
-    finally:
-        db.close()
+def search_documents(query: str = Query(...), db: Session = Depends(get_db)):
+    results = db.query(Document).join(ExtractedText).filter(ExtractedText.content.ilike(f"%{query}%")).all()
+    return [
+        {
+            "document_id": doc.id,
+            "name": doc.name,
+            "type": doc.type,
+            "upload_date": doc.upload_date,
+            "status": doc.status,
+            "snippet": next((text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()), "")
+        }
+        for doc in results
+    ]
 
-
-@app.post("/ask")
-def ask_question(question: str = Form(...)):
-    db = SessionLocal()
-    try:
-        all_texts = db.query(ExtractedText).all()
-        combined_text = "\n".join(text.content for text in all_texts if text.content)
-        if not combined_text.strip():
-            return {"answer": "No documents uploaded to answer from."}
-
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(
-            f"{settings['prompt']}\n\nDocuments:\n{combined_text}\n\nQuestion:\n{question}",
-            generation_config={"temperature": settings["temperature"], "top_k": settings["top_k"]}
-        )
-        answer_text = response.text.strip()
-
-        # --- Save question in database ---
-        q_entry = Question(question_text=question, answer_text=answer_text)
-        db.add(q_entry)
-        db.commit()
-        db.refresh(q_entry)
-
-        return {"question_id": q_entry.id, "question": question, "answer": answer_text}
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
-
-
-@app.post("/ask/contextual")
-def ask_contextual(session_id: str = Form(...), question: str = Form(...)):
-    db = SessionLocal()
-    try:
-        history = conversation_histories.get(session_id, [])
-        context_text = "\n".join([f"Q: {q['question']}\nA: {q['answer']}" for q in history[-3:]])
-        all_texts = db.query(ExtractedText).all()
-        combined_text = "\n".join(text.content for text in all_texts if text.content)
-        if not combined_text.strip():
-            return {"answer": "No documents uploaded to answer from."}
-
-        prompt = f"{settings['prompt']}\n\nConversation History:\n{context_text}\n\nDocuments:\n{combined_text}\n\nCurrent Question:\n{question}"
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(
-            prompt,
-            generation_config={"temperature": settings["temperature"], "top_k": settings["top_k"]}
-        )
-        answer = response.text.strip()
-
-        # --- Save question and link to documents ---
-        q_entry = Question(question_text=question, answer_text=answer)
-        db.add(q_entry)
-        db.flush()  # get q_entry.id
-
-        for doc in db.query(Document).all():
-            qs_entry = QuestionSource(question_id=q_entry.id, document_id=doc.id, relevance_score=None)
-            db.add(qs_entry)
-
-        db.commit()
-        db.refresh(q_entry)
-
-        # --- Update session history ---
-        history.append({"question": question, "answer": answer})
-        conversation_histories[session_id] = history
-
-        return {"session_id": session_id, "question_id": q_entry.id, "question": question, "answer": answer}
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
-
+# -------------------- RUN APP --------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 7860)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 7860)), reload=True)
