@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import Spinner from "../components/Spinner.jsx";
 import Message from "../components/Message.jsx";
 
-const API_BASE = import.meta.env.VITE_API_BASE || ""; // empty → same origin
+const API_BASE = import.meta.env.VITE_API_BASE || "";
+
 
 export default function Chat() {
   const [input, setInput] = useState("");

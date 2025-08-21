@@ -6,7 +6,7 @@ export default function Upload() {
   async function uploadFile(endpoint) {
     const formData = new FormData();
     formData.append("file", file);
-    await fetch(`http://16.171.55.12:8000/upload/${endpoint}`, {
+    await fetch(`http://127.0.0.1:8000/upload/${endpoint}`, {
       method: "POST",
       body: formData,
     });

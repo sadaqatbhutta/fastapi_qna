@@ -4,13 +4,13 @@ export default function Settings() {
   const [settings, setSettings] = useState({ prompt: "", temperature: 0.7, top_k: 10 });
 
   async function loadSettings() {
-    const res = await fetch("http://16.171.55.12:8000/settings");
+    const res = await fetch("http://127.0.0.1:8000/settings");
     const data = await res.json();
     setSettings(data);
   }
 
   async function saveSettings() {
-    await fetch("http://16.171.55.12:8000/settings", {
+    await fetch("http://127.0.0.1:8000/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),

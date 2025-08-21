@@ -7,7 +7,7 @@ export default function Save() {
 
   const fetchSaved = async () => {
     try {
-      const res = await axios.get("http://16.171.55.12:8000/saved");
+      const res = await axios.get("http://127.0.0.1:8000/saved");
       console.log("Saved API Response:", res.data); // Debugging ke liye
 
       // Ensure hamesha array hi set ho
@@ -26,7 +26,7 @@ export default function Save() {
 
   const handleDelete = async (id) => {
     try {
-      await axios.delete(`http://16.171.55.12:8000/saved/${id}`);
+      await axios.delete(`http://127.0.0.1:8000/saved/${id}`);
       setSavedItems((prev) => prev.filter((item) => item.id !== id));
     } catch (err) {
       console.error("Error deleting item:", err);

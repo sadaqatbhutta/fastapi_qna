@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+
 export default function Documents() {
   const [docs, setDocs] = useState([]);
   const [viewDoc, setViewDoc] = useState(null);
@@ -7,7 +9,7 @@ export default function Documents() {
   // Fetch all documents
   async function loadDocs() {
     try {
-      const res = await fetch("http://16.171.55.12:8000/documents");
+      const res = await fetch(`${API_BASE}/documents`);
       const data = await res.json();
       setDocs(data);
     } catch (err) {
@@ -19,7 +21,7 @@ export default function Documents() {
   async function deleteDoc(id) {
     if (!confirm("Are you sure you want to delete this document?")) return;
     try {
-      await fetch(`http://16.171.55.12:8000/${id}`, { method: "DELETE" });
+      await fetch(`${API_BASE}/document/${id}`, { method: "DELETE" });
       loadDocs();
     } catch (err) {
       console.error("Error deleting document:", err);
@@ -29,7 +31,8 @@ export default function Documents() {
   // View document content
   async function viewDocument(id) {
     try {
-      const res = await fetch(`http://16.171.55.12:8000/document/${id}`);
+      const res = await fetch(`${API_BASE}/document/${id}`);
+      if (!res.ok) throw new Error("Document not found");
       const data = await res.json();
       setViewDoc(data);
     } catch (err) {

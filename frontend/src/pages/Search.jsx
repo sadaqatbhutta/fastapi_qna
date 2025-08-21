@@ -13,7 +13,7 @@ export default function SearchDocuments() {
     setError("");
     try {
       // Make sure backend port matches your FastAPI server
-      const res = await axios.get(`http://16.171.55.12:8000/search`, {
+      const res = await axios.get(`http://127.0.0.1:8000/search`, {
         params: { query: query.trim() }, // query param must match backend
       });
 

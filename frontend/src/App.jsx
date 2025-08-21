@@ -31,7 +31,7 @@ function Chat() {
 
   const saveQnA = async (q, a) => {
     try {
-      await axios.post("http://16.171.55.12:8000/save", { question: q, answer: a });
+      await axios.post("http://127.0.0.1:8000/save", { question: q, answer: a });
     } catch (err) {
       console.error("Save failed:", err);
     }
