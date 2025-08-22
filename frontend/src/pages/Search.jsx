@@ -6,6 +6,7 @@ export default function SearchDocuments() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const token = localStorage.getItem("token"); // <-- get user token
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -15,6 +16,7 @@ export default function SearchDocuments() {
       // Make sure backend port matches your FastAPI server
       const res = await axios.get(`http://127.0.0.1:8000/search`, {
         params: { query: query.trim() }, // query param must match backend
+        headers: { token: token } // <-- include token in headers
       });
 
       if (res.data.length === 0) {

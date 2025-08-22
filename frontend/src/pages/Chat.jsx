@@ -2,16 +2,16 @@ import { useState, useRef, useEffect } from "react";
 import Spinner from "../components/Spinner.jsx";
 import Message from "../components/Message.jsx";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "";
-
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 export default function Chat() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const listRef = useRef(null);
+  const token = localStorage.getItem("token");
 
-  // -------- Auto scroll when new message --------
+  // Auto scroll when new message
   useEffect(() => {
     listRef.current?.scrollTo({
       top: listRef.current.scrollHeight,
@@ -19,44 +19,63 @@ export default function Chat() {
     });
   }, [messages, loading]);
 
-  // -------- Ask Question --------
   const ask = async () => {
     const q = input.trim();
     if (!q) return;
+
+    if (!token) {
+      setMessages((m) => [
+        ...m,
+        { role: "bot", text: "You must be logged in to ask questions." },
+      ]);
+      return;
+    }
+
     setMessages((m) => [...m, { role: "user", text: q }]);
     setInput("");
     setLoading(true);
 
     try {
-      const fd = new FormData();
-      fd.append("question", q);
+      // Send JSON to match backend
+      const res = await fetch(`${API_BASE}/ask`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ question: q }),
+      });
 
-      const res = await fetch(`${API_BASE}/ask`, { method: "POST", body: fd });
       const data = await res.json();
 
-      // Backend response handling
-      let answer = "No answer returned.";
-      if (data) {
-        if (typeof data === "string") {
-          answer = data; // If backend returns string
-        } else if (data.answer) {
-          answer = data.answer; // If backend returns { answer: "..." }
-        }
+      if (!res.ok) {
+        throw new Error(data.detail || "Server error");
       }
 
-      // Show bot reply
+      const answer = data.answer || "No answer returned.";
+
       setMessages((m) => [...m, { role: "bot", text: answer }]);
+
+      // Automatically save Q&A
+      await fetch(`${API_BASE}/save`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ question: q, answer }),
+      });
     } catch (e) {
+      console.error(e);
       setMessages((m) => [
         ...m,
-        { role: "bot", text: "Error contacting server." },
+        { role: "bot", text: `Error: ${e.message}` },
       ]);
     } finally {
       setLoading(false);
     }
   };
 
-  // -------- Handle Enter --------
   const onKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -64,7 +83,6 @@ export default function Chat() {
     }
   };
 
-  // -------- UI --------
   return (
     <div className="card">
       <div className="card-header">

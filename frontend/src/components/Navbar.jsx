@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { NavLink } from "react-router-dom";
 
 export default function Navbar() {
@@ -12,11 +12,9 @@ export default function Navbar() {
     const root = document.documentElement;
     if (darkMode) {
       root.classList.add("dark");
-      root.classList.remove("light");
       localStorage.setItem("theme", "dark");
     } else {
       root.classList.remove("dark");
-      root.classList.add("light");
       localStorage.setItem("theme", "light");
     }
   }, [darkMode]);

@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+
 export default function Save() {
   const [savedItems, setSavedItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const token = localStorage.getItem("token"); // ✅ get token
 
   const fetchSaved = async () => {
     try {
-      const res = await axios.get("http://127.0.0.1:8000/saved");
-      console.log("Saved API Response:", res.data); // Debugging ke liye
+      const res = await axios.get(`${API_BASE}/saved`, {
+        headers: { Authorization: `Bearer ${token}` } // ✅ include token
+      });
+      console.log("Saved API Response:", res.data);
 
-      // Ensure hamesha array hi set ho
       setSavedItems(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       console.error("Error fetching saved items:", err);
@@ -26,7 +30,9 @@ export default function Save() {
 
   const handleDelete = async (id) => {
     try {
-      await axios.delete(`http://127.0.0.1:8000/saved/${id}`);
+      await axios.delete(`${API_BASE}/saved/${id}`, {
+        headers: { Authorization: `Bearer ${token}` } // ✅ include token
+      });
       setSavedItems((prev) => prev.filter((item) => item.id !== id));
     } catch (err) {
       console.error("Error deleting item:", err);

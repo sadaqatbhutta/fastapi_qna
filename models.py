@@ -9,18 +9,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Config ---
-DATABASE_FILE = "documents.db"
-DATABASE_URL = f"sqlite:///./{DATABASE_FILE}"
-DEBUG = os.getenv("DEBUG") == "1"
-
-# --- SQLAlchemy setup ---
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+# --- Base ---
 Base = declarative_base()
 
+# -------------------- USER MODEL --------------------
+class User(Base):
+    __tablename__ = "users"
 
-# --- Models ---
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    otp = Column(String, nullable=True)  # For demo static OTP
+    password = Column(String, nullable=True)
+
+    documents = relationship("Document", back_populates="user", cascade="all, delete")
+    questions = relationship("Question", back_populates="user", cascade="all, delete")
+
+# -------------------- DOCUMENT MODEL --------------------
 class Document(Base):
     __tablename__ = "documents"
 
@@ -32,10 +36,14 @@ class Document(Base):
     status = Column(String, default="processed")  # processed, pending, failed
     age = Column(Integer, nullable=True)
     city = Column(String, nullable=True)
+
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # added
+    user = relationship("User", back_populates="documents")  # added
+
     extracted_texts = relationship("ExtractedText", back_populates="document", cascade="all, delete")
     sources = relationship("QuestionSource", back_populates="document", cascade="all, delete")
 
-
+# -------------------- EXTRACTED TEXT --------------------
 class ExtractedText(Base):
     __tablename__ = "extracted_text"
 
@@ -46,7 +54,7 @@ class ExtractedText(Base):
 
     document = relationship("Document", back_populates="extracted_texts")
 
-
+# -------------------- QUESTION MODEL --------------------
 class Question(Base):
     __tablename__ = "questions"
 
@@ -55,9 +63,12 @@ class Question(Base):
     answer_text = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # added
+    user = relationship("User", back_populates="questions")  # added
+
     sources = relationship("QuestionSource", back_populates="question", cascade="all, delete")
 
-
+# -------------------- QUESTION SOURCES --------------------
 class QuestionSource(Base):
     __tablename__ = "question_sources"
 
@@ -69,8 +80,18 @@ class QuestionSource(Base):
     question = relationship("Question", back_populates="sources")
     document = relationship("Document", back_populates="sources")
 
+# -------------------- DATABASE SETUP --------------------
+DATABASE_FILE = "documents.db"
+DATABASE_URL = f"sqlite:///./{DATABASE_FILE}"
 
-# --- Helper function to add missing columns ---
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+# -------------------- CREATE TABLES --------------------
+Base.metadata.create_all(bind=engine)
+print("✅ Database and tables created successfully.")
+
+# -------------------- HELPER TO ADD MISSING COLUMNS --------------------
 def add_column_if_missing(table_name, column_name, column_type):
     inspector = inspect(engine)
     columns = [col["name"] for col in inspector.get_columns(table_name)]
@@ -82,11 +103,10 @@ def add_column_if_missing(table_name, column_name, column_type):
     else:
         print(f"ℹ️ Column '{column_name}' already exists in '{table_name}' table.")
 
-
-# --- Create tables if they don't exist ---
-Base.metadata.create_all(bind=engine)
-print("✅ Database and tables created successfully.")
-
-# --- Ensure missing columns are added ---
+# Ensure age & city columns exist
 add_column_if_missing("documents", "age", "INTEGER")
 add_column_if_missing("documents", "city", "TEXT")
+add_column_if_missing("documents", "user_id", "INTEGER")  # new column
+add_column_if_missing("questions", "user_id", "INTEGER")  # new column
+add_column_if_missing("users", "password", "TEXT")
+

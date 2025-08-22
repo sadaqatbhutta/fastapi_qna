@@ -5,11 +5,15 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 export default function Documents() {
   const [docs, setDocs] = useState([]);
   const [viewDoc, setViewDoc] = useState(null);
+  const token = localStorage.getItem("token"); // <-- get user token
 
   // Fetch all documents
   async function loadDocs() {
     try {
-      const res = await fetch(`${API_BASE}/documents`);
+      const res = await fetch(`${API_BASE}/documents`, {
+        headers: { Authorization: `Bearer ${token}` } // ✅ FIXED
+      });
+      if (!res.ok) throw new Error("Failed to fetch documents");
       const data = await res.json();
       setDocs(data);
     } catch (err) {
@@ -21,7 +25,11 @@ export default function Documents() {
   async function deleteDoc(id) {
     if (!confirm("Are you sure you want to delete this document?")) return;
     try {
-      await fetch(`${API_BASE}/document/${id}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/document/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` } // ✅ FIXED
+      });
+      if (!res.ok) throw new Error("Failed to delete document");
       loadDocs();
     } catch (err) {
       console.error("Error deleting document:", err);
@@ -31,7 +39,9 @@ export default function Documents() {
   // View document content
   async function viewDocument(id) {
     try {
-      const res = await fetch(`${API_BASE}/document/${id}`);
+      const res = await fetch(`${API_BASE}/document/${id}`, {
+        headers: { Authorization: `Bearer ${token}` } // ✅ FIXED
+      });
       if (!res.ok) throw new Error("Document not found");
       const data = await res.json();
       setViewDoc(data);
@@ -53,10 +63,14 @@ export default function Documents() {
 
       <ul>
         {docs.map((d) => (
-          <li key={d.id} className="mb-3 p-2 border rounded-md flex justify-between items-center">
+          <li
+            key={d.id}
+            className="mb-3 p-2 border rounded-md flex justify-between items-center"
+          >
             <div>
               <strong>{d.name}</strong> ({d.type})<br />
-              Status: {d.status}, Uploaded: {new Date(d.upload_date).toLocaleString()}
+              Status: {d.status}, Uploaded:{" "}
+              {new Date(d.upload_date).toLocaleString()}
             </div>
             <div className="flex gap-2">
               <button
