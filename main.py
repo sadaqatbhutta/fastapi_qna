@@ -286,27 +286,28 @@ def ask_question(
     db.add(q_entry)
     db.flush()  # get q_entry.id before commit
 
-    # Store references (dummy for now → top 3 matched chunks)
+    # Store references (top 3 matched chunks)
     matched_chunks = [
         t for t in all_texts if question.lower() in (t.content or "").lower()
-    ][:3]  # pick max 3 chunks
+    ][:3]
 
     for chunk in matched_chunks:
         ref = QuestionSource(
             question_id=q_entry.id,
             document_id=chunk.document_id,
-            relevance_score=1.0  # static for now
+            relevance_score=1.0
         )
         db.add(ref)
 
     db.commit()
     db.refresh(q_entry)
 
-    # Prepare references for response
+    # Prepare references for frontend
     refs = [
         {
             "document_id": chunk.document_id,
-            "snippet": chunk.content[:200]
+            "document_name": chunk.document.name if hasattr(chunk, "document") else "Document",
+            "snippets": [chunk.content[:300]]
         }
         for chunk in matched_chunks
     ]
@@ -317,6 +318,26 @@ def ask_question(
         "answer": answer_text,
         "references": refs
     }
+
+    
+    # -------------------- GET STORIES BY SOURCE --------------------
+@app.get("/stories-by-source")
+def get_stories_by_source(source: str = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Fetch documents matching the source
+    docs = db.query(Document).filter(Document.user_id == current_user.id, Document.name.ilike(f"%{source}%")).all()
+    
+    stories = []
+    for doc in docs:
+        # get top 3 text chunks for each document
+        chunks = db.query(ExtractedText).filter(ExtractedText.document_id == doc.id).limit(3).all()
+        stories.append({
+            "document_id": doc.id,
+            "document_name": doc.name,
+            "snippets": [c.content[:300] for c in chunks]
+        })
+    
+    return {"stories": stories}
+
 
 
 # -------------------- GET REFERENCES FOR A QUESTION --------------------
@@ -345,6 +366,7 @@ def get_references(q_id: int, current_user: User = Depends(get_current_user), db
             })
 
     return {"references": results}
+
 
 
 # -------------------- UPLOAD ENDPOINTS --------------------

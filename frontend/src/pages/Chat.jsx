@@ -8,7 +8,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [references, setReferences] = useState([]); // ✅ references state
+  const [references, setReferences] = useState([]); // References / stories
   const listRef = useRef(null);
   const token = localStorage.getItem("token");
 
@@ -35,6 +35,7 @@ export default function Chat() {
     setMessages((m) => [...m, { role: "user", text: q }]);
     setInput("");
     setLoading(true);
+    setReferences([]); // Clear previous references
 
     try {
       const res = await fetch(`${API_BASE}/ask`, {
@@ -53,7 +54,7 @@ export default function Chat() {
       }
 
       const answer = data.answer || "No answer returned.";
-      const qid = data.question_id; // ✅ backend se question_id lena
+      const qid = data.question_id;
 
       // Bot ka jawab aur "View Sources" button add karna
       setMessages((m) => [
@@ -85,7 +86,7 @@ export default function Chat() {
     }
   };
 
-  // ✅ References load karna by question_id
+  // References load karna by question_id
   const loadReferences = async (id) => {
     try {
       const res = await fetch(`${API_BASE}/question/${id}/references`, {
@@ -93,14 +94,45 @@ export default function Chat() {
       });
       const data = await res.json();
 
-      // data.references array expect kar raha hai
       if (res.ok) {
-        setReferences(data.references || []);
+        // Ensure snippets array exists
+        const refs = (data.references || []).map((ref) => ({
+          document_id: ref.document_id,
+          document_name: ref.document_name || "Document",
+          snippets: ref.snippets || [],
+        }));
+        setReferences(refs);
       } else {
         console.error("Error:", data.detail);
       }
     } catch (err) {
       console.error("Error fetching references:", err);
+    }
+  };
+
+  // Stories load karna by clicked source
+  const loadStoriesBySource = async (sourceName) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/stories-by-source?source=${encodeURIComponent(sourceName)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      const data = await res.json();
+      if (res.ok) {
+        // Ensure snippets array exists
+        const stories = (data.stories || []).map((s) => ({
+          document_id: s.document_id,
+          document_name: s.document_name || "Document",
+          snippets: s.snippets || [],
+        }));
+        setReferences(stories);
+      } else {
+        console.error("Error fetching stories:", data.detail);
+      }
+    } catch (err) {
+      console.error("Error fetching stories:", err);
     }
   };
 
@@ -134,19 +166,23 @@ export default function Chat() {
           </div>
         ))}
 
-        {/* ✅ References ko clearly show karna */}
+        {/* References & stories display */}
         {references.length > 0 && (
           <div className="mt-4 space-y-2">
-            <h3 className="font-semibold">References:</h3>
+            <h3 className="font-semibold">References / Stories:</h3>
             {references.map((ref, i) => (
               <div key={i} className="border p-2 rounded bg-gray-50">
-                <p className="font-medium">{ref.document_name}</p>
-                {ref.snippets &&
-                  ref.snippets.map((s, j) => (
-                    <p key={j} className="text-sm text-gray-700">
-                      {s}
-                    </p>
-                  ))}
+                {ref.document_name && (
+                  <p
+                    className="font-medium cursor-pointer text-blue-600 underline"
+                    onClick={() => loadStoriesBySource(ref.document_name)}
+                  >
+                    {ref.document_name}
+                  </p>
+                )}
+                {ref.snippets.map((s, j) => (
+                  <p key={j} className="text-sm text-gray-700">{s}</p>
+                ))}
               </div>
             ))}
           </div>
