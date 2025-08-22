@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Float, inspect, text
+    create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Float, inspect, text, Boolean
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
@@ -20,6 +20,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     otp = Column(String, nullable=True)  # For demo static OTP
     password = Column(String, nullable=True)
+    verified = Column(Boolean, default=False)  # ✅ New field for OTP verification
 
     documents = relationship("Document", back_populates="user", cascade="all, delete")
     questions = relationship("Question", back_populates="user", cascade="all, delete")
@@ -109,4 +110,4 @@ add_column_if_missing("documents", "city", "TEXT")
 add_column_if_missing("documents", "user_id", "INTEGER")  # new column
 add_column_if_missing("questions", "user_id", "INTEGER")  # new column
 add_column_if_missing("users", "password", "TEXT")
-
+add_column_if_missing("users", "verified", "BOOLEAN")  # ✅ new column for OTP

@@ -1,13 +1,13 @@
-import { useState, useEffect } from "react";
-import { NavLink } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { NavLink, useNavigate } from "react-router-dom";
 
-export default function Navbar() {
+export default function Navbar({ onLogout }) {
   const [open, setOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(
     localStorage.getItem("theme") === "dark"
   );
+  const navigate = useNavigate();
 
-  // -------- Dark/Light Mode Effect --------
   useEffect(() => {
     const root = document.documentElement;
     if (darkMode) {
@@ -27,6 +27,12 @@ export default function Navbar() {
     { to: "/search", label: "Search" },
     { to: "/setting", label: "Settings" },
   ];
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    onLogout && onLogout();
+    navigate("/"); // redirect to login page
+  };
 
   return (
     <nav className="bg-slate-900 dark:bg-white dark:text-slate-900 text-white shadow-md transition">
@@ -51,11 +57,21 @@ export default function Navbar() {
                 {link.label}
               </NavLink>
             ))}
+
+            {/* Dark Mode Toggle */}
             <button
               onClick={() => setDarkMode(!darkMode)}
               className="ml-4 px-3 py-2 rounded-md bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 hover:opacity-80 transition"
             >
               {darkMode ? "🌙 Dark" : "☀️ Light"}
+            </button>
+
+            {/* Logout Button */}
+            <button
+              onClick={handleLogout}
+              className="ml-4 px-3 py-2 rounded-md bg-red-600 text-white hover:bg-red-700 transition"
+            >
+              🔓 Logout
             </button>
           </div>
 
@@ -88,6 +104,7 @@ export default function Navbar() {
               {link.label}
             </NavLink>
           ))}
+
           <button
             onClick={() => {
               setDarkMode(!darkMode);
@@ -96,6 +113,16 @@ export default function Navbar() {
             className="w-full px-3 py-2 rounded-md bg-slate-700 dark:bg-slate-200 text-white dark:text-slate-900 hover:opacity-80 transition"
           >
             {darkMode ? "🌙 Dark" : "☀️ Light"}
+          </button>
+
+          <button
+            onClick={() => {
+              handleLogout();
+              setOpen(false);
+            }}
+            className="w-full px-3 py-2 rounded-md bg-red-600 text-white hover:bg-red-700 transition"
+          >
+            🔓 Logout
           </button>
         </div>
       )}

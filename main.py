@@ -10,9 +10,10 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from jose import JWTError, jwt
 from dotenv import load_dotenv
-import google.generativeai as genai
+from models import QuestionSource 
 import openai
-import os
+import os, random, smtplib
+from email.mime.text import MIMEText
 
 # -------------------- APP SETUP --------------------
 app = FastAPI()
@@ -28,9 +29,8 @@ app.add_middleware(
 
 # Load environment variables
 load_dotenv()
-
-# Load your OpenAI API key from .env
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
 # -------------------- FRONTEND BUILD --------------------
 frontend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 assets_path = os.path.join(frontend_path, "assets")
@@ -68,18 +68,54 @@ def get_db():
     finally:
         db.close()
 
+# -------------------- OTP CONFIG --------------------
+otp_store = {}  # temporary in-memory store
+
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USER = os.getenv("SMTP_USER")  # put your gmail in .env
+SMTP_PASS = os.getenv("SMTP_PASS")  # app password in .env
+
+def send_otp_email(email: str, otp: str):
+    msg = MIMEText(f"Your OTP is {otp}, valid for 5 minutes.")
+    msg["Subject"] = "Verify your email"
+    msg["From"] = SMTP_USER
+    msg["To"] = email
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(SMTP_USER, email, msg.as_string())
+
 # -------------------- LOGIN --------------------
 class LoginRequest(BaseModel):
     email: str
     password: str
-
+    
 @app.post("/login")
 def login_user(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email, User.password == req.password).first()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not user.verified:
+        # Only generate OTP if not already sent or expired
+        record = otp_store.get(user.email)
+        if not record or datetime.utcnow() > record["expiry"]:
+            otp = str(random.randint(100000, 999999))
+            otp_store[user.email] = {"otp": otp, "expiry": datetime.utcnow() + timedelta(minutes=5)}
+            send_otp_email(user.email, otp)
+
+        return {"otp_needed": True, "message": "Email not verified. OTP sent to your email."}
+
+    # Verified user → successful login
     token = create_access_token({"sub": str(user.id)})
-    return {"access_token": token, "token_type": "bearer"}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "otp_needed": False  # explicitly for frontend
+    }
+
+
 
 # -------------------- REGISTER --------------------
 class RegisterRequest(BaseModel):
@@ -91,11 +127,62 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == req.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="User already exists")
-    new_user = User(email=req.email, password=req.password)
+
+    new_user = User(email=req.email, password=req.password, verified=False)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    return {"message": "User registered successfully", "user_id": new_user.id}
+
+    # 🔹 Always generate random OTP
+    otp = str(random.randint(100000, 999999))
+    otp_store[req.email] = {"otp": otp, "expiry": datetime.utcnow() + timedelta(minutes=5)}
+
+    # 🔹 Send OTP email
+    send_otp_email(req.email, otp)
+
+    return {
+        "message": "User registered successfully. Please verify OTP sent to your email.",
+        "user_id": new_user.id
+    }
+
+# -------------------- RESEND OTP --------------------
+@app.post("/resend-otp")
+def resend_otp(email: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.verified:
+        return {"message": "Email already verified. You can login."}
+
+    otp = str(random.randint(100000, 999999))
+    otp_store[email] = {"otp": otp, "expiry": datetime.utcnow() + timedelta(minutes=5)}
+    send_otp_email(email, otp)
+    return {"message": "New OTP sent to your email."}
+
+# -------------------- VERIFY OTP --------------------
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
+@app.post("/verify-otp")
+def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
+    record = otp_store.get(req.email)
+    if not record:
+        raise HTTPException(status_code=400, detail="No OTP found for this email")
+    if record["otp"] != req.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    if datetime.utcnow() > record["expiry"]:
+        raise HTTPException(status_code=400, detail="OTP expired")
+
+    user = db.query(User).filter(User.email == req.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.verified = True
+    db.commit()
+    del otp_store[req.email]
+
+    return {"message": "Email verified successfully. You can now login."}
 
 # -------------------- GET CURRENT USER --------------------
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -161,9 +248,8 @@ def delete_saved(q_id: int, current_user: User = Depends(get_current_user), db: 
     db.commit()
     return {"message": "Deleted successfully"}
 
+# -------------------- ASK QUESTION WITH REFERENCES --------------------
 
-
-# -------------------- ASK QUESTION --------------------
 @app.post("/ask")
 def ask_question(
     data: dict = Body(...),
@@ -174,6 +260,7 @@ def ask_question(
     if not question:
         raise HTTPException(status_code=400, detail="Question is required")
 
+    # Get all texts of user documents
     all_texts = db.query(ExtractedText).join(Document).filter(Document.user_id == current_user.id).all()
     combined_text = "\n".join([t.content for t in all_texts if t.content])
 
@@ -184,9 +271,9 @@ def ask_question(
         response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
-        {"role": "system", "content": settings['prompt']},
-        {"role": "user", "content": f"Documents:\n{combined_text}\n\nQuestion:\n{question}"}
-    ],
+                {"role": "system", "content": settings['prompt']},
+                {"role": "user", "content": f"Documents:\n{combined_text}\n\nQuestion:\n{question}"}
+            ],
             temperature=settings["temperature"],
             max_tokens=500
         )
@@ -194,13 +281,70 @@ def ask_question(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model error: {e}")
 
+    # Save Q&A
     q_entry = Question(question_text=question, answer_text=answer_text, user_id=current_user.id)
     db.add(q_entry)
+    db.flush()  # get q_entry.id before commit
+
+    # Store references (dummy for now → top 3 matched chunks)
+    matched_chunks = [
+        t for t in all_texts if question.lower() in (t.content or "").lower()
+    ][:3]  # pick max 3 chunks
+
+    for chunk in matched_chunks:
+        ref = QuestionSource(
+            question_id=q_entry.id,
+            document_id=chunk.document_id,
+            relevance_score=1.0  # static for now
+        )
+        db.add(ref)
+
     db.commit()
     db.refresh(q_entry)
 
-    return {"question_id": q_entry.id, "question": question, "answer": answer_text}
+    # Prepare references for response
+    refs = [
+        {
+            "document_id": chunk.document_id,
+            "snippet": chunk.content[:200]
+        }
+        for chunk in matched_chunks
+    ]
 
+    return {
+        "question_id": q_entry.id,
+        "question": question,
+        "answer": answer_text,
+        "references": refs
+    }
+
+
+# -------------------- GET REFERENCES FOR A QUESTION --------------------
+@app.get("/question/{q_id}/references")
+def get_references(q_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q_entry = db.query(Question).filter(Question.id == q_id, Question.user_id == current_user.id).first()
+    if not q_entry:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    refs = (
+        db.query(QuestionSource)
+        .join(Document)
+        .filter(QuestionSource.question_id == q_id)
+        .all()
+    )
+
+    results = []
+    for ref in refs:
+        doc = db.query(Document).filter(Document.id == ref.document_id).first()
+        if doc:
+            chunks = db.query(ExtractedText).filter(ExtractedText.document_id == doc.id).limit(3).all()
+            results.append({
+                "document_id": doc.id,
+                "document_name": doc.name,
+                "snippets": [c.content[:300] for c in chunks]
+            })
+
+    return {"references": results}
 
 
 # -------------------- UPLOAD ENDPOINTS --------------------
@@ -287,25 +431,13 @@ def delete_document(doc_id: int = Path(..., gt=0), current_user: User = Depends(
     return {"message": "Document deleted successfully"}
 
 @app.get("/search")
-def search_documents(
-    query: str = Query(...), 
-    current_user: User = Depends(get_current_user), 
-    db: Session = Depends(get_db)
-):
-    if query.isdigit():
-        # 🔑 If query is numeric, search only by ID
-        results = db.query(Document).filter(
-            Document.user_id == current_user.id,
-            Document.id == int(query)
-        ).all()
-    else:
-        # 🔑 If query is string, search by name or content
-        results = db.query(Document).join(ExtractedText).filter(
-            Document.user_id == current_user.id,
-            (Document.name.ilike(f"%{query}%")) |
-            (ExtractedText.content.ilike(f"%{query}%"))
-        ).all()
-
+def search_documents(query: str = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    results = db.query(Document).join(ExtractedText).filter(
+        Document.user_id == current_user.id,
+        (Document.name.ilike(f"%{query}%")) |
+        (ExtractedText.content.ilike(f"%{query}%")) |
+        (Document.id == query if query.isdigit() else False)
+    ).all()
     return [
         {
             "document_id": doc.id,
@@ -313,14 +445,10 @@ def search_documents(
             "type": doc.type,
             "upload_date": doc.upload_date,
             "status": doc.status,
-            "snippet": next(
-                (text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()), 
-                ""
-            )
+            "snippet": next((text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()), "")
         }
         for doc in results
     ]
-
 
 # -------------------- CATCH-ALL FRONTEND ROUTE --------------------
 @app.get("/{full_path:path}")
