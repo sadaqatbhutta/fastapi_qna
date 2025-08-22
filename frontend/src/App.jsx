@@ -16,7 +16,8 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
-  const API_BASE = "http://127.0.0.1:8000";
+  const API_BASE = "http://13.53.168.33:8000";
+
 
   // --------- Verify token on mount ----------
   useEffect(() => {

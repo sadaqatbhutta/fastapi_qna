@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import Spinner from "../components/Spinner.jsx";
 import Message from "../components/Message.jsx";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://13.53.168.33:8000";
 
 export default function Chat() {
   const [input, setInput] = useState("");

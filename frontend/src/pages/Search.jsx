@@ -15,7 +15,7 @@ export default function SearchDocuments() {
     setLoading(true);
     setError("");
     try {
-      const res = await axios.get("http://127.0.0.1:8000/search", {
+      const res = await axios.get(`${import.meta.env.VITE_API_BASE}/search`, {
         params: { query: query.trim() }, 
         headers: {
           Authorization: `Bearer ${token}`, 

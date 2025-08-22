@@ -20,7 +20,7 @@ export default function Upload() {
     formData.append("file", file);
 
     try {
-      const res = await fetch(`http://127.0.0.1:8000/upload/${endpoint}`, {
+      const res = await fetch(`http://13.53.168.33/upload/${endpoint}`, {
         method: "POST",
         body: formData,
         headers: {
