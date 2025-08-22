@@ -287,13 +287,25 @@ def delete_document(doc_id: int = Path(..., gt=0), current_user: User = Depends(
     return {"message": "Document deleted successfully"}
 
 @app.get("/search")
-def search_documents(query: str = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    results = db.query(Document).join(ExtractedText).filter(
-        Document.user_id == current_user.id,
-        (Document.name.ilike(f"%{query}%")) |
-        (ExtractedText.content.ilike(f"%{query}%")) |
-        (Document.id == query if query.isdigit() else False)
-    ).all()
+def search_documents(
+    query: str = Query(...), 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    if query.isdigit():
+        # 🔑 If query is numeric, search only by ID
+        results = db.query(Document).filter(
+            Document.user_id == current_user.id,
+            Document.id == int(query)
+        ).all()
+    else:
+        # 🔑 If query is string, search by name or content
+        results = db.query(Document).join(ExtractedText).filter(
+            Document.user_id == current_user.id,
+            (Document.name.ilike(f"%{query}%")) |
+            (ExtractedText.content.ilike(f"%{query}%"))
+        ).all()
+
     return [
         {
             "document_id": doc.id,
@@ -301,10 +313,14 @@ def search_documents(query: str = Query(...), current_user: User = Depends(get_c
             "type": doc.type,
             "upload_date": doc.upload_date,
             "status": doc.status,
-            "snippet": next((text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()), "")
+            "snippet": next(
+                (text.content[:200] for text in doc.extracted_texts if query.lower() in text.content.lower()), 
+                ""
+            )
         }
         for doc in results
     ]
+
 
 # -------------------- CATCH-ALL FRONTEND ROUTE --------------------
 @app.get("/{full_path:path}")

@@ -6,17 +6,20 @@ export default function SearchDocuments() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const token = localStorage.getItem("token"); // <-- get user token
+
+  // Token get from localStorage (must be set after login)
+  const token = localStorage.getItem("token");
 
   const handleSearch = async () => {
     if (!query.trim()) return;
     setLoading(true);
     setError("");
     try {
-      // Make sure backend port matches your FastAPI server
-      const res = await axios.get(`http://127.0.0.1:8000/search`, {
-        params: { query: query.trim() }, // query param must match backend
-        headers: { token: token } // <-- include token in headers
+      const res = await axios.get("http://127.0.0.1:8000/search", {
+        params: { query: query.trim() }, 
+        headers: {
+          Authorization: `Bearer ${token}`, 
+        },
       });
 
       if (res.data.length === 0) {
@@ -27,8 +30,12 @@ export default function SearchDocuments() {
         setError("");
       }
     } catch (err) {
-      console.error(err);
-      setError("Error fetching search results.");
+      console.error("Search error:", err.response ? err.response.data : err);
+      if (err.response && err.response.status === 401) {
+        setError("Unauthorized. Please login again.");
+      } else {
+        setError("Error fetching search results.");
+      }
       setResults([]);
     }
     setLoading(false);
@@ -42,7 +49,7 @@ export default function SearchDocuments() {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Type your search..."
+          placeholder="Type document name, id, or text..."
           className="flex-1 border rounded-l px-3 py-2"
         />
         <button
@@ -65,7 +72,9 @@ export default function SearchDocuments() {
                 Type: {doc.type} | Status: {doc.status} | Uploaded:{" "}
                 {new Date(doc.upload_date).toLocaleString()}
               </p>
-              <p className="mt-2">{doc.snippet ? doc.snippet : "No preview available"}...</p>
+              <p className="mt-2">
+                {doc.snippet ? doc.snippet : "No preview available"}...
+              </p>
             </li>
           ))}
         </ul>
