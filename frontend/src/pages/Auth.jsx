@@ -9,7 +9,7 @@ export default function Auth({ onAuth }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const baseUrl = "http://13.53.168.33:8000"; // apni EC2 public IP ya domain
+  const baseUrl = "http://127.0.0.1:8000"; // apni EC2 public IP ya domain
 
 
   // -------------------- REGISTER --------------------

@@ -4,14 +4,14 @@ export default function Settings() {
   const [settings, setSettings] = useState({ prompt: "", temperature: 0.7, top_k: 10 });
 
   async function loadSettings() {
-const API_BASE = import.meta.env.VITE_API_BASE || "http://13.53.168.33:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 const res = await fetch(`${API_BASE}/settings`);
     const data = await res.json();
     setSettings(data);
   }
 
   async function saveSettings() {
-    await fetch("http://13.53.168.33/settings", {
+    await fetch("http://127.0.0.1:8000/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
