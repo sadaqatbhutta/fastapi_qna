@@ -3,14 +3,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from models import SessionLocal, Document, ExtractedText, Question, User
+from models import SessionLocal, Document, ExtractedText, Question, User, TextEntry
 from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image, clean_text
 from sqlalchemy.orm import joinedload, Session
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from jose import JWTError, jwt
 from dotenv import load_dotenv
-from models import QuestionSource 
+from models import QuestionSource
+from typing import Optional
+from fpdf import FPDF
 import openai
 import os, random, smtplib
 from email.mime.text import MIMEText
@@ -114,8 +116,6 @@ def login_user(req: LoginRequest, db: Session = Depends(get_db)):
         "token_type": "bearer",
         "otp_needed": False  # explicitly for frontend
     }
-
-
 
 # -------------------- REGISTER --------------------
 class RegisterRequest(BaseModel):
@@ -236,8 +236,8 @@ def save_qna(item: QnAItem, current_user: User = Depends(get_current_user), db: 
 
 @app.get("/saved")
 def get_saved(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    saved_items = db.query(Question).filter(Question.user_id == current_user.id).all()
-    return [{"id": q.id, "question": q.question_text, "answer": q.answer_text} for q in saved_items]
+     saved_items = db.query(Question).filter(Question.user_id == current_user.id).order_by(Question.id.desc()).all()
+     return [{"id": q.id, "question": q.question_text, "answer": q.answer_text} for q in saved_items]
 
 @app.delete("/saved/{q_id}")
 def delete_saved(q_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -249,7 +249,6 @@ def delete_saved(q_id: int, current_user: User = Depends(get_current_user), db: 
     return {"message": "Deleted successfully"}
 
 # -------------------- ASK QUESTION WITH REFERENCES --------------------
-
 @app.post("/ask")
 def ask_question(
     data: dict = Body(...),
@@ -319,26 +318,19 @@ def ask_question(
         "references": refs
     }
 
-    
-    # -------------------- GET STORIES BY SOURCE --------------------
+# -------------------- GET STORIES BY SOURCE --------------------
 @app.get("/stories-by-source")
 def get_stories_by_source(source: str = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Fetch documents matching the source
     docs = db.query(Document).filter(Document.user_id == current_user.id, Document.name.ilike(f"%{source}%")).all()
-    
     stories = []
     for doc in docs:
-        # get top 3 text chunks for each document
         chunks = db.query(ExtractedText).filter(ExtractedText.document_id == doc.id).limit(3).all()
         stories.append({
             "document_id": doc.id,
             "document_name": doc.name,
             "snippets": [c.content[:300] for c in chunks]
         })
-    
     return {"stories": stories}
-
-
 
 # -------------------- GET REFERENCES FOR A QUESTION --------------------
 @app.get("/question/{q_id}/references")
@@ -367,65 +359,195 @@ def get_references(q_id: int, current_user: User = Depends(get_current_user), db
 
     return {"references": results}
 
-
-
 # -------------------- UPLOAD ENDPOINTS --------------------
 @app.post("/upload/pdf")
-async def upload_pdf(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are allowed.")
+async def upload_pdf(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
+
+
     file_path = save_upload_file(file)
     extracted = clean_text(extract_text_from_pdf(file_path))
-    doc = Document(name=file.filename, type="pdf", path=file_path, status="processed", upload_date=datetime.utcnow(), user_id=current_user.id)
+
+    doc = Document(
+        name=file.filename,
+        type="pdf",
+        path=file_path,
+        status="processed",
+        upload_date=datetime.utcnow(),
+        user_id=current_user.id
+    )
     db.add(doc)
     db.flush()
+
     text_entry = ExtractedText(document_id=doc.id, content=extracted)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
+
     return {"message": "PDF uploaded and processed", "document_id": doc.id}
 
+
 @app.post("/upload/image")
-async def upload_image(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def upload_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
-        raise HTTPException(400, "Only JPG or PNG files are allowed.")
+        raise HTTPException(status_code=400, detail="Only JPG or PNG files are allowed.")
+
     file_path = save_upload_file(file)
     extracted = clean_text(extract_text_from_image(file_path))
-    doc = Document(name=file.filename, type="image", path=file_path, status="processed", upload_date=datetime.utcnow(), user_id=current_user.id)
+
+    doc = Document(
+        name=file.filename,
+        type="image",
+        path=file_path,
+        status="processed",
+        upload_date=datetime.utcnow(),
+        user_id=current_user.id
+    )
     db.add(doc)
     db.flush()
+
     text_entry = ExtractedText(document_id=doc.id, content=extracted)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
+
     return {"message": "Image uploaded and processed", "document_id": doc.id}
 
+
 @app.post("/upload/text")
-async def upload_text(name: str = Form(...), content: str = Form(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def upload_text(
+    name: str = Form(...),
+    content: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     cleaned_content = clean_text(content)
-    doc = Document(name=name, type="text", path="N/A", status="processed", upload_date=datetime.utcnow(), user_id=current_user.id)
+
+    doc = Document(
+        name=name,
+        type="text",
+        path="N/A",
+        status="processed",
+        upload_date=datetime.utcnow(),
+        user_id=current_user.id
+    )
     db.add(doc)
     db.flush()
+
     text_entry = ExtractedText(document_id=doc.id, content=cleaned_content)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
+
     return {"message": "Text submitted successfully", "document_id": doc.id}
 
+
 @app.post("/upload/textfile")
-async def upload_text_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def upload_text_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     if not file.filename.lower().endswith(".txt"):
-        raise HTTPException(400, "Only .txt files are allowed.")
+        raise HTTPException(status_code=400, detail="Only .txt files are allowed.")
+
     content = (await file.read()).decode("utf-8")
     cleaned_content = clean_text(content)
-    doc = Document(name=file.filename, type="text", path="", upload_date=datetime.utcnow(), status="processed", user_id=current_user.id)
+
+    doc = Document(
+        name=file.filename,
+        type="text",
+        path="N/A",
+        status="processed",
+        upload_date=datetime.utcnow(),
+        user_id=current_user.id
+    )
     db.add(doc)
     db.flush()
+
     text_entry = ExtractedText(document_id=doc.id, content=cleaned_content)
     db.add(text_entry)
     db.commit()
     db.refresh(doc)
+
     return {"message": "Text file uploaded and processed", "document_id": doc.id}
+
+
+class TextAddRequest(BaseModel):
+    content: str
+
+@app.post("/text/add_text")
+def add_text(
+    request: TextAddRequest,
+    db: Session = Depends(get_db)
+):
+    new_entry = ExtractedText(content=request.content, document_id=None)
+    db.add(new_entry)
+    db.commit()
+    db.refresh(new_entry)
+
+    return {"message": "Text added successfully", "id": new_entry.id}
+
+# -------------------- UPDATE / EDIT ENDPOINT --------------------
+
+class UpdateTextRequest(BaseModel):
+    content: str
+
+@app.put("/update/text/")
+def update_text(
+    document_id: Optional[int] = None,
+    name: Optional[str] = None,
+    request: UpdateTextRequest = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not document_id and not name:
+        raise HTTPException(status_code=400, detail="Provide either document_id or name.")
+
+    # Fetch document by id or name
+    doc_query = db.query(Document).filter(Document.user_id == current_user.id)
+    if document_id:
+        doc_query = doc_query.filter(Document.id == document_id)
+    else:
+        doc_query = doc_query.filter(Document.name == name)
+
+    doc = doc_query.first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    # Fetch existing text entry
+    text_entry = db.query(ExtractedText).filter(ExtractedText.document_id == doc.id).first()
+    if not text_entry:
+        # If no text exists, create new entry
+        text_entry = ExtractedText(document_id=doc.id, content=clean_text(request.content))
+        db.add(text_entry)
+    else:
+        # Append new content
+        text_entry.content += "\n" + clean_text(request.content)
+
+    db.commit()
+    db.refresh(text_entry)
+
+    # Update PDF if document type is PDF
+    if doc.type.lower() == "pdf":
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_font("Arial", size=12)
+        for line in text_entry.content.split("\n"):
+            pdf.multi_cell(0, 10, line)
+        pdf.output(doc.path)
+
+    return {"message": "Document updated successfully", "document_id": doc.id}
 
 # -------------------- DOCUMENT MANAGEMENT --------------------
 @app.get("/documents")

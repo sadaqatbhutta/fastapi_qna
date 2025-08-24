@@ -5,13 +5,17 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 export default function Documents() {
   const [docs, setDocs] = useState([]);
   const [viewDoc, setViewDoc] = useState(null);
-  const token = localStorage.getItem("token"); // <-- get user token
+  const [updateContent, setUpdateContent] = useState("");
+  const [updateId, setUpdateId] = useState(""); // Optional: update by ID
+  const [updateName, setUpdateName] = useState(""); // Optional: update by Name
+
+  const token = localStorage.getItem("token");
 
   // Fetch all documents
   async function loadDocs() {
     try {
       const res = await fetch(`${API_BASE}/documents`, {
-        headers: { Authorization: `Bearer ${token}` } // ✅ FIXED
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Failed to fetch documents");
       const data = await res.json();
@@ -27,7 +31,7 @@ export default function Documents() {
     try {
       const res = await fetch(`${API_BASE}/document/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` } // ✅ FIXED
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Failed to delete document");
       loadDocs();
@@ -40,7 +44,7 @@ export default function Documents() {
   async function viewDocument(id) {
     try {
       const res = await fetch(`${API_BASE}/document/${id}`, {
-        headers: { Authorization: `Bearer ${token}` } // ✅ FIXED
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Document not found");
       const data = await res.json();
@@ -48,6 +52,44 @@ export default function Documents() {
     } catch (err) {
       console.error("Error fetching document:", err);
       alert("Failed to fetch document content.");
+    }
+  }
+
+  // Update document content by ID or Name
+  async function updateDocument() {
+    if (!updateContent || (!updateId && !updateName)) {
+      alert("Provide either Document ID or Name and new content.");
+      return;
+    }
+
+    const params = new URLSearchParams();
+    if (updateId) params.append("document_id", updateId);
+    if (updateName) params.append("name", updateName);
+
+    try {
+      const res = await fetch(`${API_BASE}/update/text/?${params.toString()}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content: updateContent }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Update failed");
+      }
+
+      const data = await res.json();
+      alert("Document updated successfully! Document ID: " + data.document_id);
+      setUpdateId("");
+      setUpdateName("");
+      setUpdateContent("");
+      loadDocs();
+    } catch (err) {
+      console.error(err);
+      alert("Error: " + err.message);
     }
   }
 
@@ -96,6 +138,36 @@ export default function Documents() {
           <div className="bg-white dark:bg-slate-900 p-6 rounded-lg max-w-3xl w-full overflow-auto max-h-[80vh]">
             <h3 className="text-lg font-bold mb-2">{viewDoc.name}</h3>
             <pre className="whitespace-pre-wrap">{viewDoc.content}</pre>
+
+            <div className="mt-4">
+              <input
+                type="text"
+                placeholder="Update by Document ID (optional)"
+                value={updateId}
+                onChange={(e) => setUpdateId(e.target.value)}
+                className="w-full border rounded p-2 mb-2"
+              />
+              <input
+                type="text"
+                placeholder="Update by Document Name (optional)"
+                value={updateName}
+                onChange={(e) => setUpdateName(e.target.value)}
+                className="w-full border rounded p-2 mb-2"
+              />
+              <textarea
+                placeholder="Enter new content..."
+                value={updateContent}
+                onChange={(e) => setUpdateContent(e.target.value)}
+                className="w-full border rounded p-2 h-28 mb-2"
+              />
+              <button
+                onClick={updateDocument}
+                className="bg-yellow-500 text-white px-3 py-1 rounded"
+              >
+                Update Document
+              </button>
+            </div>
+
             <button
               onClick={() => setViewDoc(null)}
               className="mt-4 px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-800"

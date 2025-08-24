@@ -81,6 +81,14 @@ class QuestionSource(Base):
     question = relationship("Question", back_populates="sources")
     document = relationship("Document", back_populates="sources")
 
+# -------------------- TEXT ENTRY MODEL --------------------
+class TextEntry(Base):
+    __tablename__ = "text_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # -------------------- DATABASE SETUP --------------------
 DATABASE_FILE = "documents.db"
 DATABASE_URL = f"sqlite:///./{DATABASE_FILE}"
