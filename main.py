@@ -360,6 +360,7 @@ def get_references(q_id: int, current_user: User = Depends(get_current_user), db
     return {"references": results}
 
 # -------------------- UPLOAD ENDPOINTS --------------------
+
 @app.post("/upload/pdf")
 async def upload_pdf(
     file: UploadFile = File(...),
@@ -369,10 +370,11 @@ async def upload_pdf(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
 
-
     file_path = save_upload_file(file)
     extracted = clean_text(extract_text_from_pdf(file_path))
 
+    # Get next sequential doc ID for this user
+    last_doc = db.query(Document).filter(Document.user_id == current_user.id).order_by(Document.id.desc()).first()
     doc = Document(
         name=file.filename,
         type="pdf",
@@ -482,21 +484,6 @@ async def upload_text_file(
     return {"message": "Text file uploaded and processed", "document_id": doc.id}
 
 
-class TextAddRequest(BaseModel):
-    content: str
-
-@app.post("/text/add_text")
-def add_text(
-    request: TextAddRequest,
-    db: Session = Depends(get_db)
-):
-    new_entry = ExtractedText(content=request.content, document_id=None)
-    db.add(new_entry)
-    db.commit()
-    db.refresh(new_entry)
-
-    return {"message": "Text added successfully", "id": new_entry.id}
-
 # -------------------- UPDATE / EDIT ENDPOINT --------------------
 
 class UpdateTextRequest(BaseModel):
@@ -513,7 +500,6 @@ def update_text(
     if not document_id and not name:
         raise HTTPException(status_code=400, detail="Provide either document_id or name.")
 
-    # Fetch document by id or name
     doc_query = db.query(Document).filter(Document.user_id == current_user.id)
     if document_id:
         doc_query = doc_query.filter(Document.id == document_id)
@@ -524,20 +510,17 @@ def update_text(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    # Fetch existing text entry
+    # Fetch or create text entry
     text_entry = db.query(ExtractedText).filter(ExtractedText.document_id == doc.id).first()
     if not text_entry:
-        # If no text exists, create new entry
         text_entry = ExtractedText(document_id=doc.id, content=clean_text(request.content))
         db.add(text_entry)
     else:
-        # Append new content
-        text_entry.content += "\n" + clean_text(request.content)
+        text_entry.content = clean_text(request.content) + "\n" + text_entry.content  # new content on top
 
     db.commit()
     db.refresh(text_entry)
 
-    # Update PDF if document type is PDF
     if doc.type.lower() == "pdf":
         pdf = FPDF()
         pdf.add_page()
@@ -549,11 +532,14 @@ def update_text(
 
     return {"message": "Document updated successfully", "document_id": doc.id}
 
+
 # -------------------- DOCUMENT MANAGEMENT --------------------
+
 @app.get("/documents")
 def list_documents(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     docs = db.query(Document).filter(Document.user_id == current_user.id).all()
     return [{"id": d.id, "name": d.name, "type": d.type, "path": d.path, "upload_date": d.upload_date, "status": d.status} for d in docs]
+
 
 @app.get("/document/{doc_id}")
 def get_document(doc_id: int = Path(..., gt=0), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -562,6 +548,7 @@ def get_document(doc_id: int = Path(..., gt=0), current_user: User = Depends(get
         raise HTTPException(status_code=404, detail="Document not found")
     combined_text = "\n".join([et.content for et in doc.extracted_texts])
     return {"id": doc.id, "name": doc.name, "type": doc.type, "status": doc.status, "path": doc.path, "upload_date": doc.upload_date, "content": combined_text}
+
 
 @app.delete("/document/{doc_id}")
 def delete_document(doc_id: int = Path(..., gt=0), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
