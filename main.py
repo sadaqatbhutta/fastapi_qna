@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from models import SessionLocal, Document, ExtractedText, Question, User
+from models import SessionLocal, Document, ExtractedText, Question, User, TextHistory
 from utils import save_upload_file, extract_text_from_pdf, extract_text_from_image, clean_text
 from sqlalchemy.orm import joinedload, Session
 from datetime import datetime, timedelta
@@ -14,6 +14,7 @@ from models import QuestionSource
 import openai
 import os, random, smtplib
 from email.mime.text import MIMEText
+from open_sources.wikipedia_client import wikipedia_summary_for
 
 # -------------------- APP SETUP --------------------
 app = FastAPI()
@@ -265,6 +266,39 @@ def ask_question(
     combined_text = "\n".join([t.content for t in all_texts if t.content])
 
     if not combined_text.strip():
+        # 🔁 Fallback to Wikipedia (open-source) when no local docs are available
+        wiki = wikipedia_summary_for(question)
+        if wiki:
+            title, summary = wiki
+            try:
+                response = openai.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": settings['prompt']},
+                        {"role": "user", "content": f"Public Knowledge (Wikipedia - {title}):\n{summary}\n\nQuestion:\n{question}"}
+                    ],
+                    temperature=settings["temperature"],
+                    max_tokens=500
+                )
+                answer_text = response.choices[0].message.content.strip()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Model error: {e}")
+
+            # Save Q&A even though it came from public source (no doc refs)
+            q_entry = Question(question_text=question, answer_text=answer_text, user_id=current_user.id)
+            db.add(q_entry)
+            db.commit()
+            db.refresh(q_entry)
+
+            return {
+                "question_id": q_entry.id,
+                "question": question,
+                "answer": answer_text,
+                "references": [],
+                "source": "wikipedia"
+            }
+
+        # If Wikipedia also fails, return fallback message
         return {"answer": "No documents uploaded to answer from."}
 
     try:
@@ -319,8 +353,9 @@ def ask_question(
         "references": refs
     }
 
+
     
-    # -------------------- GET STORIES BY SOURCE --------------------
+# -------------------- GET STORIES BY SOURCE --------------------
 @app.get("/stories-by-source")
 def get_stories_by_source(source: str = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Fetch documents matching the source
@@ -426,6 +461,98 @@ async def upload_text_file(file: UploadFile = File(...), current_user: User = De
     db.commit()
     db.refresh(doc)
     return {"message": "Text file uploaded and processed", "document_id": doc.id}
+
+
+
+# -------------------- ADD FREE / PLAIN TEXT --------------------
+@app.post("/text/add")
+def add_plain_text(content: str, document_name: str = "free_text", current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Add plain text (without PDF/Image upload).
+    """
+    # Check if a user-specific "free_text" document exists, else create one
+    document = db.query(Document).filter(Document.name == document_name, Document.user_id == current_user.id).first()
+    if not document:
+        document = Document(name=document_name, type="text", path="", status="processed", user_id=current_user.id)
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+
+    # Save extracted text
+    new_text = ExtractedText(
+        document_id=document.id,
+        content=content,
+        page_number=None,
+        version=1
+    )
+    db.add(new_text)
+    db.commit()
+    db.refresh(new_text)
+
+    return {
+        "message": "✅ Plain text added successfully.",
+        "text_id": new_text.id,
+        "document_id": document.id,
+        "content": new_text.content
+    }
+
+
+# -------------------- UPDATE EXISTING TEXT --------------------
+@app.put("/text/{text_id}")
+def update_text(text_id: int, new_content: str, db: Session = Depends(get_db)):
+    """
+    Update text content and store old version in history.
+    """
+    text_obj = db.query(ExtractedText).filter(ExtractedText.id == text_id).first()
+    if not text_obj:
+        raise HTTPException(status_code=404, detail="❌ Text not found")
+
+    # Save old content in history
+    history = TextHistory(
+        text_id=text_obj.id,
+        old_content=text_obj.content,
+        new_content=new_content,
+        changed_at=datetime.utcnow()
+    )
+    db.add(history)
+
+    # Update main text
+    text_obj.content = new_content
+    # Ensure version column exists and increment safely
+    try:
+        text_obj.version = (text_obj.version or 0) + 1
+    except Exception:
+        text_obj.version = 1
+
+    db.commit()
+    db.refresh(text_obj)
+
+    return {
+        "message": "✅ Text updated successfully.",
+        "new_content": text_obj.content,
+        "version": text_obj.version
+    }
+
+
+# -------------------- GET TEXT HISTORY --------------------
+@app.get("/text/{text_id}/history")
+def get_text_history(text_id: int, db: Session = Depends(get_db)):
+    """
+    Get all previous versions of a text.
+    """
+    histories = db.query(TextHistory).filter(TextHistory.text_id == text_id).all()
+    if not histories:
+        return {"message": "ℹ️ No history found for this text."}
+
+    return [
+        {
+            "id": h.id,
+            "old_content": h.old_content,
+            "new_content": h.new_content,
+            "changed_at": h.changed_at
+        }
+        for h in histories
+    ]
 
 # -------------------- DOCUMENT MANAGEMENT --------------------
 @app.get("/documents")

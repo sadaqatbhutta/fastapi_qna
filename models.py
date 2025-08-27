@@ -20,10 +20,11 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     otp = Column(String, nullable=True)  # For demo static OTP
     password = Column(String, nullable=True)
-    verified = Column(Boolean, default=False)  # ✅ New field for OTP verification
+    verified = Column(Boolean, default=False)  # ✅ For OTP verification
 
     documents = relationship("Document", back_populates="user", cascade="all, delete")
     questions = relationship("Question", back_populates="user", cascade="all, delete")
+
 
 # -------------------- DOCUMENT MODEL --------------------
 class Document(Base):
@@ -38,11 +39,12 @@ class Document(Base):
     age = Column(Integer, nullable=True)
     city = Column(String, nullable=True)
 
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # added
-    user = relationship("User", back_populates="documents")  # added
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user = relationship("User", back_populates="documents")
 
     extracted_texts = relationship("ExtractedText", back_populates="document", cascade="all, delete")
     sources = relationship("QuestionSource", back_populates="document", cascade="all, delete")
+
 
 # -------------------- EXTRACTED TEXT --------------------
 class ExtractedText(Base):
@@ -52,8 +54,24 @@ class ExtractedText(Base):
     document_id = Column(Integer, ForeignKey("documents.id"))
     content = Column(Text)
     page_number = Column(Integer, nullable=True)
+    version = Column(Integer, default=1)  # ✅ New field for version control
 
     document = relationship("Document", back_populates="extracted_texts")
+    history = relationship("TextHistory", back_populates="text", cascade="all, delete")
+
+
+# -------------------- TEXT HISTORY (NEW) --------------------
+class TextHistory(Base):
+    __tablename__ = "text_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    text_id = Column(Integer, ForeignKey("extracted_text.id"))
+    old_content = Column(Text)
+    new_content = Column(Text)
+    changed_at = Column(DateTime, default=datetime.utcnow)
+
+    text = relationship("ExtractedText", back_populates="history")
+
 
 # -------------------- QUESTION MODEL --------------------
 class Question(Base):
@@ -64,10 +82,11 @@ class Question(Base):
     answer_text = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # added
-    user = relationship("User", back_populates="questions")  # added
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user = relationship("User", back_populates="questions")
 
     sources = relationship("QuestionSource", back_populates="question", cascade="all, delete")
+
 
 # -------------------- QUESTION SOURCES --------------------
 class QuestionSource(Base):
@@ -81,6 +100,7 @@ class QuestionSource(Base):
     question = relationship("Question", back_populates="sources")
     document = relationship("Document", back_populates="sources")
 
+
 # -------------------- DATABASE SETUP --------------------
 DATABASE_FILE = "documents.db"
 DATABASE_URL = f"sqlite:///./{DATABASE_FILE}"
@@ -90,7 +110,8 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 # -------------------- CREATE TABLES --------------------
 Base.metadata.create_all(bind=engine)
-print("✅ Database and tables created successfully.")
+print("✅ Database and tables created successfully with versioning.")
+
 
 # -------------------- HELPER TO ADD MISSING COLUMNS --------------------
 def add_column_if_missing(table_name, column_name, column_type):
@@ -104,10 +125,12 @@ def add_column_if_missing(table_name, column_name, column_type):
     else:
         print(f"ℹ️ Column '{column_name}' already exists in '{table_name}' table.")
 
-# Ensure age & city columns exist
+
+# Ensure missing columns exist
 add_column_if_missing("documents", "age", "INTEGER")
 add_column_if_missing("documents", "city", "TEXT")
-add_column_if_missing("documents", "user_id", "INTEGER")  # new column
-add_column_if_missing("questions", "user_id", "INTEGER")  # new column
+add_column_if_missing("documents", "user_id", "INTEGER")
+add_column_if_missing("questions", "user_id", "INTEGER")
 add_column_if_missing("users", "password", "TEXT")
-add_column_if_missing("users", "verified", "BOOLEAN")  # ✅ new column for OTP
+add_column_if_missing("users", "verified", "BOOLEAN")
+add_column_if_missing("extracted_text", "version", "INTEGER")  # ✅ new
